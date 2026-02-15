@@ -1,11 +1,12 @@
 'use client'
 import { motion } from 'framer-motion';
-import { useStakeContract } from "../../hooks/useContract";
+import { useStakeContract, useTokenContract } from "../../hooks/useContract";
 import useRewards from "../../hooks/useRewards";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Pid } from "../../utils";
 import { useAccount, useWalletClient, useBalance } from "wagmi";
-import { parseUnits } from "viem";
+import { parseUnits, zeroAddress } from "viem";
+import type { Address } from "viem";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { toast } from "react-toastify";
 import { waitForTransactionReceipt } from "viem/actions";
@@ -14,6 +15,7 @@ import { cn } from '../../utils/cn';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Card } from '../../components/ui/Card';
+import { StakeContractAddress } from "../../utils/env";
 
 const Home = () => {
   const stakeContract = useStakeContract();
@@ -23,10 +25,19 @@ const Home = () => {
   const [loading, setLoading] = useState(false);
   const [claimLoading, setClaimLoading] = useState(false);
   const { data } = useWalletClient();
-  const { data: balance } = useBalance({
+
+  const isEthPool = useMemo(() => {
+    const addr = poolData.stTokenAddress;
+    return !addr || addr === zeroAddress || addr === '0x0000000000000000000000000000000000000000';
+  }, [poolData.stTokenAddress]);
+
+  const tokenContract = useTokenContract(poolData.stTokenAddress as Address | undefined);
+
+  const { data: balance, refetch: refetchBalance } = useBalance({
     address: address,
+    token: isEthPool ? undefined : (poolData.stTokenAddress as Address | undefined),
     query: {
-      enabled: isConnected,
+      enabled: isConnected && (isEthPool || !!poolData.stTokenAddress),
       refetchInterval: 10000,
       refetchIntervalInBackground: false,
     }
@@ -39,28 +50,54 @@ const Home = () => {
       return;
     }
 
-    if (parseFloat(amount) > parseFloat(balance!.formatted)) {
+    const decimals = balance?.decimals ?? 18;
+    const amountWei = parseUnits(amount, decimals);
+
+    if (!balance || parseFloat(amount) > parseFloat(balance.formatted)) {
       toast.error('Amount cannot be greater than current balance');
       return;
     }
 
     try {
       setLoading(true);
-      const tx = await stakeContract.write.depositETH([], { value: parseUnits(amount, 18) });
-      const res = await waitForTransactionReceipt(data, { hash: tx });
-      console.log({ res })
-      if (res.status === 'success') {
-        toast.success('Stake successful!');
-        setAmount('');
-        setLoading(false);
-        refresh(); // 刷新奖励数据
-        return
+
+      if (isEthPool) {
+        const tx = await stakeContract.write.depositETH([], { value: amountWei });
+        const res = await waitForTransactionReceipt(data, { hash: tx });
+        if (res.status === 'success') {
+          toast.success('Stake successful!');
+          setAmount('');
+          refetchBalance?.();
+          refresh();
+          return;
+        }
+        toast.error('Stake failed!');
+      } else {
+        if (!tokenContract) {
+          toast.error('Token contract not ready');
+          setLoading(false);
+          return;
+        }
+        // 处理ERC20 token 质押
+        const stakeAddress = StakeContractAddress;
+        const approveTx = await tokenContract.write.approve([stakeAddress, amountWei]);
+        await waitForTransactionReceipt(data, { hash: approveTx });
+        const depositTx = await stakeContract.write.deposit([Pid, amountWei]);
+        const res = await waitForTransactionReceipt(data, { hash: depositTx });
+        if (res.status === 'success') {
+          toast.success('Stake successful!');
+          setAmount('');
+          refetchBalance?.();
+          refresh();
+          return;
+        }
+        toast.error('Stake failed!');
       }
-      toast.error('Stake failed!')
     } catch (error) {
-      setLoading(false);
       toast.error('Transaction failed. Please try again.');
       console.log(error, 'stake-error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -124,7 +161,7 @@ const Home = () => {
               <div className="flex flex-col justify-center flex-1 min-w-0 items-center sm:items-start">
                 <span className="text-gray-400 text-base sm:text-lg mb-1">Staked Amount</span>
                 <span className="text-3xl sm:text-5xl font-bold bg-gradient-to-r from-primary-400 to-primary-600 bg-clip-text text-transparent leading-tight break-all">
-                  {parseFloat(poolData.stTokenAmount || '0').toFixed(4)} ETH
+                  {parseFloat(poolData.stTokenAmount || '0').toFixed(4)} {isEthPool ? 'ETH' : 'Token'}
                 </span>
               </div>
             </div>
@@ -137,8 +174,8 @@ const Home = () => {
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="0.0"
-                rightElement={<span className="text-gray-500">ETH</span>}
-                helperText={balance ? `Available: ${parseFloat(balance.formatted).toFixed(4)} ETH` : undefined}
+                rightElement={<span className="text-gray-500">{isEthPool ? 'ETH' : 'Token'}</span>}
+                helperText={balance ? `Available: ${parseFloat(balance.formatted).toFixed(4)} ${isEthPool ? 'ETH' : 'Token'}` : undefined}
                 className="text-lg sm:text-xl py-3 sm:py-5"
               />
             </div>
@@ -160,7 +197,7 @@ const Home = () => {
                   className="py-3 sm:py-5 text-lg sm:text-xl"
                 >
                   <FiArrowDown className="w-6 h-6 sm:w-7 sm:h-7" />
-                  <span>Stake ETH</span>
+                  <span>Stake {isEthPool ? 'ETH' : 'Token'}</span>
                 </Button>
               )}
             </div>

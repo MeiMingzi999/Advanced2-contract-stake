@@ -1,7 +1,7 @@
 const { ethers } = require("hardhat");
 
 async function main() {
-  const MetaNodeStake = await ethers.getContractAt("MetaNodeStake", "0x8E2DB240acAc06208c65D9bE4A1BCfcc65D17Bbb");
+  const MetaNodeStake = await ethers.getContractAt("MetaNodeStake", "0x56682aa855226f3228b374a69aF5017D174372Fe");
 
   // 用于本地测试: 本地跑了 npx hardhat node, 
   // 接着运行了另一个终端跑了: npx hardhat run scripts/deploy.js --network localhost, 生成了部署在本地的合约0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
@@ -31,7 +31,7 @@ async function main() {
     
     // 发送交易时使用更高的 gas price 和明确的 nonce
     const tx = await MetaNodeStake.connect(signer).addPool(
-      ethers.ZeroAddress, 
+      ethers.ZeroAddress, // TODO: ERC-20 代币的地址
       500, 
       100, 
       20, 
